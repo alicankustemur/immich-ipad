@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Photo Frame</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+}
+html, body {
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: Helvetica, Arial, sans-serif;
+}
+#current, #preload {
+    position: absolute;
+}
+#preload {
+    visibility: hidden;
+}
+#info {
+    position: absolute;
+    z-index: 10;
+    color: #fff;
+    text-align: right;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5);
+}
+#info-date {
+    font-size: 28px;
+    font-weight: bold;
+}
+#info-city {
+    font-size: 22px;
+    margin-top: 2px;
+    opacity: 0.85;
+}
+</style>
+</head>
+<body>
+<img id="current" alt="">
+<img id="preload" alt="">
+<div id="info">
+    <div id="info-date"></div>
+    <div id="info-city"></div>
+</div>
+<script>
+(function() {
+    var interval = {{.Interval}} * 1000;
+    var current = document.getElementById("current");
+    var preload = document.getElementById("preload");
+    var info = document.getElementById("info");
+    var infoDate = document.getElementById("info-date");
+    var infoCity = document.getElementById("info-city");
+
+    function positionImage(img) {
+        var winW = window.innerWidth || document.documentElement.clientWidth;
+        var winH = window.innerHeight || document.documentElement.clientHeight;
+        var natW = img.naturalWidth || img.width;
+        var natH = img.naturalHeight || img.height;
+        if (!natW || !natH) return;
+
+        var scale = Math.min(1, winW / natW, winH / natH);
+        var w = Math.round(natW * scale);
+        var h = Math.round(natH * scale);
+        var x = Math.round((winW - w) / 2);
+        var y = Math.round((winH - h) / 2);
+
+        img.style.left = x + "px";
+        img.style.top = y + "px";
+        img.style.width = w + "px";
+        img.style.height = h + "px";
+
+        info.style.left = (x + w - info.offsetWidth - 10) + "px";
+        info.style.top = (y + h - info.offsetHeight - 10) + "px";
+    }
+
+    function loadPhoto() {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "/random?t=" + new Date().getTime(), true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
+                    var data;
+                    try {
+                        data = eval("(" + xhr.responseText + ")");
+                    } catch(e) {
+                        setTimeout(loadPhoto, interval);
+                        return;
+                    }
+                    preload.onload = function() {
+                        current.src = preload.src;
+                        infoDate.innerHTML = data.date || "";
+                        infoCity.innerHTML = data.city || "";
+                        positionImage(current);
+                        preload.onload = null;
+                        preload.src = "";
+                        setTimeout(loadPhoto, interval);
+                    };
+                    preload.onerror = function() {
+                        preload.onerror = null;
+                        setTimeout(loadPhoto, interval);
+                    };
+                    preload.src = "/photo?id=" + data.id;
+                } else {
+                    setTimeout(loadPhoto, interval);
+                }
+            }
+        };
+        xhr.send(null);
+    }
+
+    loadPhoto();
+})();
+</script>
+</body>
+</html>
