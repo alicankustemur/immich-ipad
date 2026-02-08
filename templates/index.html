@@ -30,6 +30,12 @@ html, body {
     color: #fff;
     text-align: right;
     text-shadow: 0 1px 4px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5);
+    opacity: 0;
+    -webkit-transition: opacity 0.8s ease-in;
+    transition: opacity 0.8s ease-in;
+}
+#info.visible {
+    opacity: 1;
 }
 #info-date {
     font-size: 24px;
@@ -59,7 +65,6 @@ html, body {
     var infoDate = document.getElementById("info-date");
     var infoCity = document.getElementById("info-city");
 
-    var queue = [];
     var loaded = [];
     var fetching = false;
 
@@ -140,10 +145,16 @@ html, body {
         }
 
         var item = loaded.shift();
+
+        info.className = "";
         infoDate.innerHTML = item.date || "";
         infoCity.innerHTML = item.city || "";
         current.src = item.img.src;
         positionImage(current);
+
+        setTimeout(function() {
+            info.className = "visible";
+        }, 500);
 
         if (loaded.length <= 1) {
             fetchBatch(null);

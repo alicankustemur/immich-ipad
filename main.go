@@ -92,10 +92,15 @@ func main() {
 	cache := &AlbumCache{}
 
 	if cfg.AlbumID != "" {
-		if err := cache.refresh(client, cfg); err != nil {
-			log.Fatalf("Failed to load album %s: %v", cfg.AlbumID, err)
+		for {
+			if err := cache.refresh(client, cfg); err != nil {
+				log.Printf("Waiting for Immich... (%v)", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			log.Printf("Loaded %d photos from album", len(cache.assets))
+			break
 		}
-		log.Printf("Loaded %d photos from album", len(cache.assets))
 		go func() {
 			for {
 				time.Sleep(5 * time.Minute)
