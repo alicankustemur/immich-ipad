@@ -32,13 +32,13 @@ html, body {
     text-shadow: 0 1px 4px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5);
 }
 #info-date {
-    font-size: 28px;
+    font-size: 24px;
     font-weight: bold;
 }
 #info-city {
-    font-size: 22px;
-    margin-top: 2px;
-    opacity: 0.85;
+    font-size: 24px;
+    font-weight: bold;
+    margin-top: 4px;
 }
 </style>
 </head>
@@ -52,11 +52,16 @@ html, body {
 <script>
 (function() {
     var interval = {{.Interval}} * 1000;
+    var BATCH_SIZE = 5;
     var current = document.getElementById("current");
     var preload = document.getElementById("preload");
     var info = document.getElementById("info");
     var infoDate = document.getElementById("info-date");
     var infoCity = document.getElementById("info-city");
+
+    var queue = [];
+    var loaded = [];
+    var fetching = false;
 
     function positionImage(img) {
         var winW = window.innerWidth || document.documentElement.clientWidth;
@@ -80,42 +85,74 @@ html, body {
         info.style.top = (y + h - info.offsetHeight - 10) + "px";
     }
 
-    function loadPhoto() {
+    function fetchBatch(callback) {
+        if (fetching) return;
+        fetching = true;
         var xhr = new XMLHttpRequest();
-        xhr.open("GET", "/random?t=" + new Date().getTime(), true);
+        xhr.open("GET", "/batch?count=" + BATCH_SIZE + "&t=" + new Date().getTime(), true);
         xhr.onreadystatechange = function() {
             if (xhr.readyState === 4) {
+                fetching = false;
                 if (xhr.status === 200) {
-                    var data;
+                    var batch;
                     try {
-                        data = eval("(" + xhr.responseText + ")");
+                        batch = eval("(" + xhr.responseText + ")");
                     } catch(e) {
-                        setTimeout(loadPhoto, interval);
+                        if (callback) callback();
                         return;
                     }
-                    preload.onload = function() {
-                        current.src = preload.src;
-                        infoDate.innerHTML = data.date || "";
-                        infoCity.innerHTML = data.city || "";
-                        positionImage(current);
-                        preload.onload = null;
-                        preload.src = "";
-                        setTimeout(loadPhoto, interval);
-                    };
-                    preload.onerror = function() {
-                        preload.onerror = null;
-                        setTimeout(loadPhoto, interval);
-                    };
-                    preload.src = "/photo?id=" + data.id;
+                    preloadBatch(batch, callback);
                 } else {
-                    setTimeout(loadPhoto, interval);
+                    if (callback) callback();
                 }
             }
         };
         xhr.send(null);
     }
 
-    loadPhoto();
+    function preloadBatch(batch, callback) {
+        var remaining = batch.length;
+        if (remaining === 0) {
+            if (callback) callback();
+            return;
+        }
+        for (var i = 0; i < batch.length; i++) {
+            (function(item) {
+                var img = new Image();
+                img.onload = function() {
+                    loaded.push({ img: img, date: item.date, city: item.city });
+                    remaining--;
+                    if (remaining === 0 && callback) callback();
+                };
+                img.onerror = function() {
+                    remaining--;
+                    if (remaining === 0 && callback) callback();
+                };
+                img.src = "/photo?id=" + item.id + "&t=" + new Date().getTime();
+            })(batch[i]);
+        }
+    }
+
+    function showNext() {
+        if (loaded.length === 0) {
+            fetchBatch(showNext);
+            return;
+        }
+
+        var item = loaded.shift();
+        infoDate.innerHTML = item.date || "";
+        infoCity.innerHTML = item.city || "";
+        current.src = item.img.src;
+        positionImage(current);
+
+        if (loaded.length <= 1) {
+            fetchBatch(null);
+        }
+
+        setTimeout(showNext, interval);
+    }
+
+    fetchBatch(showNext);
 })();
 </script>
 </body>

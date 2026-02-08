@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"text/template"
 	"time"
 )
@@ -19,8 +21,18 @@ var templateFS embed.FS
 type Config struct {
 	ImmichURL         string
 	ImmichAPIKey      string
+	AlbumID           string
 	SlideshowInterval int
 	Port              string
+}
+
+type Album struct {
+	Assets []Asset `json:"assets"`
+}
+
+type AlbumCache struct {
+	mu     sync.RWMutex
+	assets []Asset
 }
 
 type Asset struct {
@@ -58,6 +70,7 @@ func loadConfig() Config {
 	return Config{
 		ImmichURL:         os.Getenv("IMMICH_URL"),
 		ImmichAPIKey:      os.Getenv("IMMICH_API_KEY"),
+		AlbumID:           os.Getenv("ALBUM_ID"),
 		SlideshowInterval: interval,
 		Port:              port,
 	}
@@ -76,6 +89,24 @@ func main() {
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
+	cache := &AlbumCache{}
+
+	if cfg.AlbumID != "" {
+		if err := cache.refresh(client, cfg); err != nil {
+			log.Fatalf("Failed to load album %s: %v", cfg.AlbumID, err)
+		}
+		log.Printf("Loaded %d photos from album", len(cache.assets))
+		go func() {
+			for {
+				time.Sleep(5 * time.Minute)
+				if err := cache.refresh(client, cfg); err != nil {
+					log.Printf("Error refreshing album cache: %v", err)
+				} else {
+					log.Printf("Refreshed album cache: %d photos", len(cache.assets))
+				}
+			}
+		}()
+	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -89,7 +120,7 @@ func main() {
 	})
 
 	http.HandleFunc("/random", func(w http.ResponseWriter, r *http.Request) {
-		info, err := getRandomPhotoInfo(client, cfg)
+		info, err := getRandomPhoto(client, cfg, cache)
 		if err != nil {
 			log.Printf("Error getting random photo info: %v", err)
 			http.Error(w, "Failed to get random photo", http.StatusBadGateway)
@@ -100,10 +131,31 @@ func main() {
 		json.NewEncoder(w).Encode(info)
 	})
 
+	http.HandleFunc("/batch", func(w http.ResponseWriter, r *http.Request) {
+		count := 5
+		if v := r.URL.Query().Get("count"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 20 {
+				count = n
+			}
+		}
+		var batch []PhotoInfo
+		for i := 0; i < count; i++ {
+			info, err := getRandomPhoto(client, cfg, cache)
+			if err != nil {
+				log.Printf("Error getting photo %d/%d for batch: %v", i+1, count, err)
+				continue
+			}
+			batch = append(batch, *info)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		json.NewEncoder(w).Encode(batch)
+	})
+
 	http.HandleFunc("/photo", func(w http.ResponseWriter, r *http.Request) {
 		assetID := r.URL.Query().Get("id")
 		if assetID == "" {
-			info, err := getRandomPhotoInfo(client, cfg)
+			info, err := getRandomPhoto(client, cfg, cache)
 			if err != nil {
 				log.Printf("Error getting random photo: %v", err)
 				http.Error(w, "Failed to get random photo", http.StatusBadGateway)
@@ -147,7 +199,65 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
-func getRandomPhotoInfo(client *http.Client, cfg Config) (*PhotoInfo, error) {
+func (c *AlbumCache) refresh(client *http.Client, cfg Config) error {
+	url := fmt.Sprintf("%s/api/albums/%s", cfg.ImmichURL, cfg.AlbumID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("x-api-key", cfg.ImmichAPIKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("calling Immich API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Immich API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var album Album
+	if err := json.NewDecoder(resp.Body).Decode(&album); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
+
+	var photos []Asset
+	for _, a := range album.Assets {
+		if a.Type == "IMAGE" {
+			photos = append(photos, a)
+		}
+	}
+
+	c.mu.Lock()
+	c.assets = photos
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *AlbumCache) random() *Asset {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.assets) == 0 {
+		return nil
+	}
+	return &c.assets[rand.Intn(len(c.assets))]
+}
+
+func getRandomPhoto(client *http.Client, cfg Config, cache *AlbumCache) (*PhotoInfo, error) {
+	if cfg.AlbumID != "" {
+		a := cache.random()
+		if a == nil {
+			return nil, fmt.Errorf("album cache is empty")
+		}
+		return &PhotoInfo{
+			ID:   a.ID,
+			Date: formatDate(a.FileCreatedAt),
+			City: buildLocation(a.ExifInfo),
+		}, nil
+	}
+
 	for attempts := 0; attempts < 5; attempts++ {
 		url := fmt.Sprintf("%s/api/assets/random?count=1", cfg.ImmichURL)
 		req, err := http.NewRequest("GET", url, nil)
@@ -178,9 +288,11 @@ func getRandomPhotoInfo(client *http.Client, cfg Config) (*PhotoInfo, error) {
 
 		if assets[0].Type == "IMAGE" {
 			a := assets[0]
-			date := formatDate(a.FileCreatedAt)
-			city := buildLocation(a.ExifInfo)
-			return &PhotoInfo{ID: a.ID, Date: date, City: city}, nil
+			return &PhotoInfo{
+				ID:   a.ID,
+				Date: formatDate(a.FileCreatedAt),
+				City: buildLocation(a.ExifInfo),
+			}, nil
 		}
 
 		log.Printf("Skipping non-image asset (type=%s), retrying...", assets[0].Type)
