@@ -46,6 +46,11 @@ html, body {
     font-weight: bold;
     margin-top: 4px;
 }
+#info-count {
+    font-size: 24px;
+    font-weight: bold;
+    margin-top: 4px;
+}
 </style>
 </head>
 <body>
@@ -54,6 +59,7 @@ html, body {
 <div id="info">
     <div id="info-date"></div>
     <div id="info-city"></div>
+    <div id="info-count"></div>
 </div>
 <script>
 (function() {
@@ -64,9 +70,18 @@ html, body {
     var info = document.getElementById("info");
     var infoDate = document.getElementById("info-date");
     var infoCity = document.getElementById("info-city");
+    var infoCount = document.getElementById("info-count");
 
     var loaded = [];
     var fetching = false;
+    var lastChange = new Date().getTime();
+
+    // Watchdog: reload page if stuck for 3x the interval
+    setInterval(function() {
+        if (new Date().getTime() - lastChange > interval * 3) {
+            window.location.reload();
+        }
+    }, interval);
 
     function positionImage(img) {
         var winW = window.innerWidth || document.documentElement.clientWidth;
@@ -125,7 +140,7 @@ html, body {
             (function(item) {
                 var img = new Image();
                 img.onload = function() {
-                    loaded.push({ img: img, date: item.date, city: item.city });
+                    loaded.push({ img: img, date: item.date, city: item.city, index: item.index, total: item.total });
                     remaining--;
                     if (remaining === 0 && callback) callback();
                 };
@@ -145,10 +160,12 @@ html, body {
         }
 
         var item = loaded.shift();
+        lastChange = new Date().getTime();
 
         info.className = "";
         infoDate.innerHTML = item.date || "";
         infoCity.innerHTML = item.city || "";
+        infoCount.innerHTML = item.index && item.total ? item.index + " / " + item.total : "";
         current.src = item.img.src;
         positionImage(current);
 

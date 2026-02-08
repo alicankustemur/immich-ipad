@@ -31,15 +31,18 @@ type Album struct {
 }
 
 type AlbumCache struct {
-	mu     sync.RWMutex
-	assets []Asset
+	mu       sync.RWMutex
+	assets   []Asset
+	shuffled []Asset
+	index    int
 }
 
 type Asset struct {
-	ID              string   `json:"id"`
-	Type            string   `json:"type"`
-	FileCreatedAt   string   `json:"fileCreatedAt"`
-	ExifInfo        ExifInfo `json:"exifInfo"`
+	ID            string   `json:"id"`
+	Type          string   `json:"type"`
+	FileCreatedAt string   `json:"fileCreatedAt"`
+	ExifInfo      ExifInfo `json:"exifInfo"`
+	OriginalIndex int      `json:"-"`
 }
 
 type ExifInfo struct {
@@ -49,9 +52,11 @@ type ExifInfo struct {
 }
 
 type PhotoInfo struct {
-	ID   string `json:"id"`
-	Date string `json:"date"`
-	City string `json:"city"`
+	ID    string `json:"id"`
+	Date  string `json:"date"`
+	City  string `json:"city"`
+	Index int    `json:"index"`
+	Total int    `json:"total"`
 }
 
 func loadConfig() Config {
@@ -231,6 +236,7 @@ func (c *AlbumCache) refresh(client *http.Client, cfg Config) error {
 	var photos []Asset
 	for _, a := range album.Assets {
 		if a.Type == "IMAGE" {
+			a.OriginalIndex = len(photos) + 1
 			photos = append(photos, a)
 		}
 	}
@@ -241,25 +247,48 @@ func (c *AlbumCache) refresh(client *http.Client, cfg Config) error {
 	return nil
 }
 
-func (c *AlbumCache) random() *Asset {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+type NextResult struct {
+	Asset *Asset
+	Index int
+	Total int
+}
+
+func (c *AlbumCache) next() *NextResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.assets) == 0 {
 		return nil
 	}
-	return &c.assets[rand.Intn(len(c.assets))]
+	if c.index >= len(c.shuffled) || len(c.shuffled) == 0 {
+		c.shuffled = make([]Asset, len(c.assets))
+		copy(c.shuffled, c.assets)
+		rand.Shuffle(len(c.shuffled), func(i, j int) {
+			c.shuffled[i], c.shuffled[j] = c.shuffled[j], c.shuffled[i]
+		})
+		c.index = 0
+		log.Printf("Shuffled %d photos for new cycle", len(c.shuffled))
+	}
+	r := &NextResult{
+		Asset: &c.shuffled[c.index],
+		Index: c.shuffled[c.index].OriginalIndex,
+		Total: len(c.shuffled),
+	}
+	c.index++
+	return r
 }
 
 func getRandomPhoto(client *http.Client, cfg Config, cache *AlbumCache) (*PhotoInfo, error) {
 	if cfg.AlbumID != "" {
-		a := cache.random()
-		if a == nil {
+		r := cache.next()
+		if r == nil {
 			return nil, fmt.Errorf("album cache is empty")
 		}
 		return &PhotoInfo{
-			ID:   a.ID,
-			Date: formatDate(a.FileCreatedAt),
-			City: buildLocation(a.ExifInfo),
+			ID:    r.Asset.ID,
+			Date:  formatDate(r.Asset.FileCreatedAt),
+			City:  buildLocation(r.Asset.ExifInfo),
+			Index: r.Index,
+			Total: r.Total,
 		}, nil
 	}
 
