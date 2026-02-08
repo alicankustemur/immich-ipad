@@ -4,9 +4,14 @@ Turn an old iPad into a digital photo frame that displays random photos from you
 
 Built for iPad 1 (iOS 5.1.1 Safari), but works on any browser.
 
-## How It Works
+## Features
 
-A Go server proxies photos from Immich and serves a minimal HTML slideshow. Photos are preloaded in batches of 5 for smooth, flicker-free transitions. Each photo displays for a configurable interval with the date and location shown in the bottom-right corner.
+- Shuffled slideshow with no repeats — every photo is shown before the cycle restarts
+- Batch preloading (5 photos ahead) for smooth, flicker-free transitions
+- Photo info overlay (date in Turkish, location, photo counter) fades in on the bottom-right corner of each photo
+- Album support — restrict to a specific Immich album
+- Watchdog auto-reload if the slideshow gets stuck
+- Retries on startup if Immich isn't ready yet
 
 ## Quick Start
 
