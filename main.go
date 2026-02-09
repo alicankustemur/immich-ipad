@@ -26,31 +26,6 @@ type Config struct {
 	Port              string
 }
 
-type Album struct {
-	Assets []Asset `json:"assets"`
-}
-
-type AlbumCache struct {
-	mu       sync.RWMutex
-	assets   []Asset
-	shuffled []Asset
-	index    int
-}
-
-type Asset struct {
-	ID            string   `json:"id"`
-	Type          string   `json:"type"`
-	FileCreatedAt string   `json:"fileCreatedAt"`
-	ExifInfo      ExifInfo `json:"exifInfo"`
-	OriginalIndex int      `json:"-"`
-}
-
-type ExifInfo struct {
-	City    string `json:"city"`
-	State   string `json:"state"`
-	Country string `json:"country"`
-}
-
 type PhotoInfo struct {
 	ID    string `json:"id"`
 	Date  string `json:"date"`
@@ -59,8 +34,14 @@ type PhotoInfo struct {
 	Total int    `json:"total"`
 }
 
+type AlbumCache struct {
+	mu     sync.Mutex
+	photos []PhotoInfo
+	index  int
+}
+
 func loadConfig() Config {
-	interval := 10
+	interval := 15
 	if v := os.Getenv("SLIDESHOW_INTERVAL"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			interval = n
@@ -93,7 +74,7 @@ func main() {
 		log.Fatalf("Failed to parse template: %v", err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	cache := &AlbumCache{}
 
 	if cfg.AlbumID != "" {
@@ -103,7 +84,7 @@ func main() {
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			log.Printf("Loaded %d photos from album", len(cache.assets))
+			log.Printf("Loaded %d photos from album", len(cache.photos))
 			break
 		}
 		go func() {
@@ -112,7 +93,7 @@ func main() {
 				if err := cache.refresh(client, cfg); err != nil {
 					log.Printf("Error refreshing album cache: %v", err)
 				} else {
-					log.Printf("Refreshed album cache: %d photos", len(cache.assets))
+					log.Printf("Refreshed album cache: %d photos", len(cache.photos))
 				}
 			}
 		}()
@@ -142,7 +123,7 @@ func main() {
 	})
 
 	http.HandleFunc("/batch", func(w http.ResponseWriter, r *http.Request) {
-		count := 5
+		count := 2
 		if v := r.URL.Query().Get("count"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 20 {
 				count = n
@@ -209,6 +190,25 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
+// Album cache: stores only lightweight PhotoInfo, shuffles in place
+
+type albumAsset struct {
+	ID            string   `json:"id"`
+	Type          string   `json:"type"`
+	FileCreatedAt string   `json:"fileCreatedAt"`
+	ExifInfo      exifInfo `json:"exifInfo"`
+}
+
+type exifInfo struct {
+	City    string `json:"city"`
+	State   string `json:"state"`
+	Country string `json:"country"`
+}
+
+type albumResponse struct {
+	Assets []albumAsset `json:"assets"`
+}
+
 func (c *AlbumCache) refresh(client *http.Client, cfg Config) error {
 	url := fmt.Sprintf("%s/api/albums/%s", cfg.ImmichURL, cfg.AlbumID)
 	req, err := http.NewRequest("GET", url, nil)
@@ -228,68 +228,71 @@ func (c *AlbumCache) refresh(client *http.Client, cfg Config) error {
 		return fmt.Errorf("Immich API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var album Album
+	var album albumResponse
 	if err := json.NewDecoder(resp.Body).Decode(&album); err != nil {
 		return fmt.Errorf("decoding response: %w", err)
 	}
 
-	var photos []Asset
+	// Convert to lightweight PhotoInfo immediately, discard heavy Asset data
+	var photos []PhotoInfo
+	idx := 1
 	for _, a := range album.Assets {
 		if a.Type == "IMAGE" {
-			a.OriginalIndex = len(photos) + 1
-			photos = append(photos, a)
+			photos = append(photos, PhotoInfo{
+				ID:    a.ID,
+				Date:  formatDate(a.FileCreatedAt),
+				City:  buildLocation(a.ExifInfo),
+				Index: idx,
+			})
+			idx++
 		}
 	}
+	// album goes out of scope here — GC reclaims the ~1.2MB JSON data
+
+	total := len(photos)
+	for i := range photos {
+		photos[i].Total = total
+	}
+
+	// Shuffle in place
+	rand.Shuffle(len(photos), func(i, j int) {
+		photos[i], photos[j] = photos[j], photos[i]
+	})
 
 	c.mu.Lock()
-	c.assets = photos
+	c.photos = photos
+	c.index = 0
 	c.mu.Unlock()
+	log.Printf("Shuffled %d photos for new cycle", total)
 	return nil
 }
 
-type NextResult struct {
-	Asset *Asset
-	Index int
-	Total int
-}
-
-func (c *AlbumCache) next() *NextResult {
+func (c *AlbumCache) next() *PhotoInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.assets) == 0 {
+	if len(c.photos) == 0 {
 		return nil
 	}
-	if c.index >= len(c.shuffled) || len(c.shuffled) == 0 {
-		c.shuffled = make([]Asset, len(c.assets))
-		copy(c.shuffled, c.assets)
-		rand.Shuffle(len(c.shuffled), func(i, j int) {
-			c.shuffled[i], c.shuffled[j] = c.shuffled[j], c.shuffled[i]
+	if c.index >= len(c.photos) {
+		// All photos shown — reshuffle
+		rand.Shuffle(len(c.photos), func(i, j int) {
+			c.photos[i], c.photos[j] = c.photos[j], c.photos[i]
 		})
 		c.index = 0
-		log.Printf("Shuffled %d photos for new cycle", len(c.shuffled))
+		log.Printf("Reshuffled %d photos for new cycle", len(c.photos))
 	}
-	r := &NextResult{
-		Asset: &c.shuffled[c.index],
-		Index: c.shuffled[c.index].OriginalIndex,
-		Total: len(c.shuffled),
-	}
+	p := &c.photos[c.index]
 	c.index++
-	return r
+	return p
 }
 
 func getRandomPhoto(client *http.Client, cfg Config, cache *AlbumCache) (*PhotoInfo, error) {
 	if cfg.AlbumID != "" {
-		r := cache.next()
-		if r == nil {
+		p := cache.next()
+		if p == nil {
 			return nil, fmt.Errorf("album cache is empty")
 		}
-		return &PhotoInfo{
-			ID:    r.Asset.ID,
-			Date:  formatDate(r.Asset.FileCreatedAt),
-			City:  buildLocation(r.Asset.ExifInfo),
-			Index: r.Index,
-			Total: r.Total,
-		}, nil
+		return p, nil
 	}
 
 	for attempts := 0; attempts < 5; attempts++ {
@@ -311,7 +314,7 @@ func getRandomPhoto(client *http.Client, cfg Config, cache *AlbumCache) (*PhotoI
 			return nil, fmt.Errorf("Immich API returned status %d: %s", resp.StatusCode, string(body))
 		}
 
-		var assets []Asset
+		var assets []albumAsset
 		if err := json.NewDecoder(resp.Body).Decode(&assets); err != nil {
 			return nil, fmt.Errorf("decoding response: %w", err)
 		}
@@ -351,7 +354,7 @@ func formatDate(isoDate string) string {
 	return fmt.Sprintf("%d %s %d", t.Day(), turkishMonths[t.Month()-1], t.Year())
 }
 
-func buildLocation(exif ExifInfo) string {
+func buildLocation(exif exifInfo) string {
 	parts := []string{}
 	if exif.City != "" {
 		parts = append(parts, exif.City)
