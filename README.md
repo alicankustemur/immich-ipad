@@ -32,7 +32,7 @@ docker compose up --build
 cp .env.example .env
 # Edit .env with your values
 set -a && source .env && set +a
-go run main.go
+go run .
 ```
 
 Open `http://localhost:3000` in a browser.
@@ -48,6 +48,20 @@ Open `http://localhost:3000` in a browser.
 | `PORT` | Server port | `3000` |
 
 Generate an API key in Immich under **User Settings > API Keys**.
+
+## Project Structure
+
+```
+main.go        — entry point, template embed
+server.go      — Server struct, routes, city lookup
+handlers.go    — HTTP handlers (index, random, photo)
+cache.go       — PhotoCache, random page fetching
+config.go      — environment config loading
+format.go      — PhotoInfo type, Turkish date formatting
+immich.go      — Immich API types
+templates/
+  index.html   — slideshow UI (iPad 1 compatible)
+```
 
 ## iPad Setup
 
