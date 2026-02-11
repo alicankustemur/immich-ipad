@@ -18,18 +18,15 @@ html, body {
     overflow: hidden;
     font-family: Helvetica, Arial, sans-serif;
 }
-#current, #preload {
+#current {
     position: absolute;
-}
-#preload {
-    visibility: hidden;
 }
 #info {
     position: absolute;
     z-index: 10;
     color: #fff;
     text-align: right;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5);
+    text-shadow: 0 1px 3px #000, 0 0 8px #000, 0 0 16px rgba(0,0,0,0.5);
     opacity: 0;
     -webkit-transition: opacity 0.8s ease-in;
     transition: opacity 0.8s ease-in;
@@ -42,52 +39,45 @@ html, body {
     font-weight: bold;
 }
 #info-city {
-    font-size: 24px;
-    font-weight: bold;
-    margin-top: 4px;
+    font-size: 20px;
+    margin-top: 2px;
 }
-#info-count {
-    font-size: 24px;
-    font-weight: bold;
-    margin-top: 4px;
+#status {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    -webkit-transform: translate(-50%, -50%);
+    transform: translate(-50%, -50%);
+    color: #888;
+    font-size: 28px;
+    text-align: center;
+    z-index: 20;
+}
+#status.hidden {
+    display: none;
 }
 </style>
 </head>
 <body>
 <img id="current" alt="">
-<img id="preload" alt="">
 <div id="info">
     <div id="info-date"></div>
     <div id="info-city"></div>
-    <div id="info-count"></div>
 </div>
+<div id="status">Sunucuya baglaniyor...</div>
 <script>
 (function() {
     var interval = {{.Interval}} * 1000;
-    var BATCH_SIZE = 2;
     var current = document.getElementById("current");
-    var preload = document.getElementById("preload");
     var info = document.getElementById("info");
     var infoDate = document.getElementById("info-date");
     var infoCity = document.getElementById("info-city");
-    var infoCount = document.getElementById("info-count");
+    var status = document.getElementById("status");
+    var RETRY_WAIT = 60000;
 
-    var loaded = [];
-    var fetching = false;
-    var lastChange = new Date().getTime();
-
-    // Watchdog: reload page if stuck for 3x the interval
-    setInterval(function() {
-        if (new Date().getTime() - lastChange > interval * 3) {
-            window.location.reload();
-        }
-    }, interval);
-
-    function positionImage(img) {
+    function positionImage(img, natW, natH) {
         var winW = window.innerWidth || document.documentElement.clientWidth;
         var winH = window.innerHeight || document.documentElement.clientHeight;
-        var natW = img.naturalWidth || img.width;
-        var natH = img.naturalHeight || img.height;
         if (!natW || !natH) return;
 
         var scale = Math.min(1, winW / natW, winH / natH);
@@ -105,82 +95,57 @@ html, body {
         info.style.top = (y + h - info.offsetHeight - 10) + "px";
     }
 
-    function fetchBatch(callback) {
-        if (fetching) return;
-        fetching = true;
+    function showNext() {
         var xhr = new XMLHttpRequest();
-        xhr.open("GET", "/batch?count=" + BATCH_SIZE + "&t=" + new Date().getTime(), true);
+        xhr.open("GET", "/random?t=" + new Date().getTime(), true);
         xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4) {
-                fetching = false;
-                if (xhr.status === 200) {
-                    var batch;
-                    try {
-                        batch = eval("(" + xhr.responseText + ")");
-                    } catch(e) {
-                        if (callback) callback();
-                        return;
-                    }
-                    preloadBatch(batch, callback);
-                } else {
-                    if (callback) callback();
-                }
+            if (xhr.readyState !== 4) return;
+            if (xhr.status !== 200) {
+                status.className = "";
+                setTimeout(showNext, RETRY_WAIT);
+                return;
             }
+            var item;
+            try {
+                item = eval("(" + xhr.responseText + ")");
+            } catch(e) {
+                status.className = "";
+                setTimeout(showNext, RETRY_WAIT);
+                return;
+            }
+            if (!item || !item.id) {
+                status.className = "";
+                setTimeout(showNext, RETRY_WAIT);
+                return;
+            }
+            status.className = "hidden";
+            info.className = "";
+
+            var img = new Image();
+            img.onload = function() {
+                current.src = img.src;
+                current.onload = function() {
+                    var natW = current.naturalWidth || current.width;
+                    var natH = current.naturalHeight || current.height;
+                    positionImage(current, natW, natH);
+                    infoDate.innerHTML = item.date || "";
+                    infoCity.innerHTML = item.city || "";
+                    setTimeout(function() {
+                        info.className = "visible";
+                    }, 500);
+                };
+            };
+            img.onerror = function() {
+                setTimeout(showNext, interval);
+            };
+            img.src = "/photo?id=" + item.id + "&t=" + new Date().getTime();
+
+            setTimeout(showNext, interval);
         };
         xhr.send(null);
     }
 
-    function preloadBatch(batch, callback) {
-        var remaining = batch.length;
-        if (remaining === 0) {
-            if (callback) callback();
-            return;
-        }
-        for (var i = 0; i < batch.length; i++) {
-            (function(item) {
-                var img = new Image();
-                img.onload = function() {
-                    loaded.push({ img: img, date: item.date, city: item.city, index: item.index, total: item.total });
-                    remaining--;
-                    if (remaining === 0 && callback) callback();
-                };
-                img.onerror = function() {
-                    remaining--;
-                    if (remaining === 0 && callback) callback();
-                };
-                img.src = "/photo?id=" + item.id + "&t=" + new Date().getTime();
-            })(batch[i]);
-        }
-    }
-
-    function showNext() {
-        if (loaded.length === 0) {
-            fetchBatch(showNext);
-            return;
-        }
-
-        var item = loaded.shift();
-        lastChange = new Date().getTime();
-
-        info.className = "";
-        infoDate.innerHTML = item.date || "";
-        infoCity.innerHTML = item.city || "";
-        infoCount.innerHTML = item.index && item.total ? item.index + " / " + item.total : "";
-        current.src = item.img.src;
-        positionImage(current);
-
-        setTimeout(function() {
-            info.className = "visible";
-        }, 500);
-
-        if (loaded.length <= 1) {
-            fetchBatch(null);
-        }
-
-        setTimeout(showNext, interval);
-    }
-
-    fetchBatch(showNext);
+    showNext();
 })();
 </script>
 </body>

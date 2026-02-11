@@ -6,3 +6,9 @@ services:
     env_file:
       - .env
     restart: always
+    networks:
+      - immich_default
+
+networks:
+  immich_default:
+    external: true

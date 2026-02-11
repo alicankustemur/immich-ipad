@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"text/template"
 	"time"
@@ -21,23 +23,27 @@ var templateFS embed.FS
 type Config struct {
 	ImmichURL         string
 	ImmichAPIKey      string
-	AlbumID           string
+	DeviceModel       string
 	SlideshowInterval int
 	Port              string
 }
 
 type PhotoInfo struct {
-	ID    string `json:"id"`
-	Date  string `json:"date"`
-	City  string `json:"city"`
-	Index int    `json:"index"`
-	Total int    `json:"total"`
+	ID       string `json:"id"`
+	Date     string `json:"date"`
+	City     string `json:"city"`
+	Index    int    `json:"index"`
+	Total    int    `json:"total"`
+	cityDone bool
 }
 
-type AlbumCache struct {
-	mu     sync.Mutex
-	photos []PhotoInfo
-	index  int
+type PhotoCache struct {
+	mu       sync.Mutex
+	queue    []PhotoInfo     // ready to show
+	shown    map[string]bool // already shown IDs
+	maxPage  int
+	client   *http.Client
+	cfg      Config
 }
 
 func loadConfig() Config {
@@ -53,10 +59,15 @@ func loadConfig() Config {
 		port = v
 	}
 
+	deviceModel := os.Getenv("DEVICE_MODEL")
+	if deviceModel == "" {
+		deviceModel = "iPhone 14 Pro"
+	}
+
 	return Config{
 		ImmichURL:         os.Getenv("IMMICH_URL"),
 		ImmichAPIKey:      os.Getenv("IMMICH_API_KEY"),
-		AlbumID:           os.Getenv("ALBUM_ID"),
+		DeviceModel:       deviceModel,
 		SlideshowInterval: interval,
 		Port:              port,
 	}
@@ -75,28 +86,11 @@ func main() {
 	}
 
 	client := &http.Client{Timeout: 120 * time.Second}
-	cache := &AlbumCache{}
-
-	if cfg.AlbumID != "" {
-		for {
-			if err := cache.refresh(client, cfg); err != nil {
-				log.Printf("Waiting for Immich... (%v)", err)
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			log.Printf("Loaded %d photos from album", len(cache.photos))
-			break
-		}
-		go func() {
-			for {
-				time.Sleep(5 * time.Minute)
-				if err := cache.refresh(client, cfg); err != nil {
-					log.Printf("Error refreshing album cache: %v", err)
-				} else {
-					log.Printf("Refreshed album cache: %d photos", len(cache.photos))
-				}
-			}
-		}()
+	cache := &PhotoCache{
+		shown:   make(map[string]bool),
+		maxPage: 85000,
+		client:  client,
+		cfg:     cfg,
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -111,54 +105,30 @@ func main() {
 	})
 
 	http.HandleFunc("/random", func(w http.ResponseWriter, r *http.Request) {
-		info, err := getRandomPhoto(client, cfg, cache)
-		if err != nil {
-			log.Printf("Error getting random photo info: %v", err)
-			http.Error(w, "Failed to get random photo", http.StatusBadGateway)
+		p := cache.next()
+		if p == nil {
+			http.Error(w, "Loading photos...", http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		json.NewEncoder(w).Encode(info)
-	})
-
-	http.HandleFunc("/batch", func(w http.ResponseWriter, r *http.Request) {
-		count := 2
-		if v := r.URL.Query().Get("count"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 20 {
-				count = n
-			}
-		}
-		var batch []PhotoInfo
-		for i := 0; i < count; i++ {
-			info, err := getRandomPhoto(client, cfg, cache)
-			if err != nil {
-				log.Printf("Error getting photo %d/%d for batch: %v", i+1, count, err)
-				continue
-			}
-			batch = append(batch, *info)
+		if !p.cityDone {
+			p.City = fetchCity(client, cfg, p.ID)
+			p.cityDone = true
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		json.NewEncoder(w).Encode(batch)
+		json.NewEncoder(w).Encode(p)
 	})
 
 	http.HandleFunc("/photo", func(w http.ResponseWriter, r *http.Request) {
 		assetID := r.URL.Query().Get("id")
 		if assetID == "" {
-			info, err := getRandomPhoto(client, cfg, cache)
-			if err != nil {
-				log.Printf("Error getting random photo: %v", err)
-				http.Error(w, "Failed to get random photo", http.StatusBadGateway)
-				return
-			}
-			assetID = info.ID
+			http.Error(w, "Missing id", http.StatusBadRequest)
+			return
 		}
 
 		thumbnailURL := fmt.Sprintf("%s/api/assets/%s/thumbnail?size=preview", cfg.ImmichURL, assetID)
 		req, err := http.NewRequest("GET", thumbnailURL, nil)
 		if err != nil {
-			log.Printf("Error creating thumbnail request: %v", err)
 			http.Error(w, "Internal error", http.StatusInternalServerError)
 			return
 		}
@@ -166,14 +136,12 @@ func main() {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("Error fetching thumbnail: %v", err)
 			http.Error(w, "Failed to fetch photo", http.StatusBadGateway)
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			log.Printf("Immich thumbnail returned status %d for asset %s", resp.StatusCode, assetID)
 			http.Error(w, "Failed to fetch photo", http.StatusBadGateway)
 			return
 		}
@@ -186,156 +154,162 @@ func main() {
 	addr := ":" + cfg.Port
 	log.Printf("Immich iPad Photo Frame server starting on %s", addr)
 	log.Printf("Immich URL: %s", cfg.ImmichURL)
+	log.Printf("Device model: %s", cfg.DeviceModel)
 	log.Printf("Slideshow interval: %ds", cfg.SlideshowInterval)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
-// Album cache: stores only lightweight PhotoInfo, shuffles in place
+// Search API types
 
-type albumAsset struct {
-	ID            string   `json:"id"`
-	Type          string   `json:"type"`
-	FileCreatedAt string   `json:"fileCreatedAt"`
-	ExifInfo      exifInfo `json:"exifInfo"`
+type searchAsset struct {
+	ID               string `json:"id"`
+	FileCreatedAt    string `json:"fileCreatedAt"`
+	OriginalFileName string `json:"originalFileName"`
 }
 
-type exifInfo struct {
-	City    string `json:"city"`
-	State   string `json:"state"`
-	Country string `json:"country"`
+type searchResponse struct {
+	Assets struct {
+		Items    []searchAsset `json:"items"`
+		NextPage string       `json:"nextPage"`
+	} `json:"assets"`
 }
 
-type albumResponse struct {
-	Assets []albumAsset `json:"assets"`
+// fillQueue fetches 1 photo from a random page
+func (c *PhotoCache) fillQueue() {
+	for retries := 0; retries < 10; retries++ {
+		page := rand.Intn(c.maxPage) + 1
+		photos, _ := c.fetchPage(c.client, c.cfg, page, 1)
+		if len(photos) == 0 {
+			continue
+		}
+		p := photos[0]
+		if !c.shown[p.ID] {
+			c.queue = append(c.queue, p)
+			log.Printf("Fetched page %d (shown: %d)", page, len(c.shown))
+			return
+		}
+	}
 }
 
-func (c *AlbumCache) refresh(client *http.Client, cfg Config) error {
-	url := fmt.Sprintf("%s/api/albums/%s", cfg.ImmichURL, cfg.AlbumID)
-	req, err := http.NewRequest("GET", url, nil)
+func (c *PhotoCache) fetchPage(client *http.Client, cfg Config, page, pageSize int) ([]PhotoInfo, bool) {
+	searchBody := map[string]interface{}{
+		"type":  "IMAGE",
+		"page":  page,
+		"size":  pageSize,
+		"model": cfg.DeviceModel,
+	}
+
+	bodyBytes, err := json.Marshal(searchBody)
 	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
+		return nil, false
+	}
+
+	req, err := http.NewRequest("POST", cfg.ImmichURL+"/api/search/metadata", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, false
 	}
 	req.Header.Set("x-api-key", cfg.ImmichAPIKey)
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("calling Immich API: %w", err)
+		log.Printf("Search API error: %v", err)
+		return nil, false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Immich API returned status %d: %s", resp.StatusCode, string(body))
+		log.Printf("Search API status %d: %s", resp.StatusCode, string(body))
+		return nil, false
 	}
 
-	var album albumResponse
-	if err := json.NewDecoder(resp.Body).Decode(&album); err != nil {
-		return fmt.Errorf("decoding response: %w", err)
+	var result searchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("Search API decode error: %v", err)
+		return nil, false
 	}
 
-	// Convert to lightweight PhotoInfo immediately, discard heavy Asset data
+	if len(result.Assets.Items) == 0 {
+		return []PhotoInfo{}, false
+	}
+
 	var photos []PhotoInfo
-	idx := 1
-	for _, a := range album.Assets {
-		if a.Type == "IMAGE" {
-			photos = append(photos, PhotoInfo{
-				ID:    a.ID,
-				Date:  formatDate(a.FileCreatedAt),
-				City:  buildLocation(a.ExifInfo),
-				Index: idx,
-			})
-			idx++
-		}
-	}
-	// album goes out of scope here — GC reclaims the ~1.2MB JSON data
-
-	total := len(photos)
-	for i := range photos {
-		photos[i].Total = total
-	}
-
-	// Shuffle in place
-	rand.Shuffle(len(photos), func(i, j int) {
-		photos[i], photos[j] = photos[j], photos[i]
-	})
-
-	c.mu.Lock()
-	c.photos = photos
-	c.index = 0
-	c.mu.Unlock()
-	log.Printf("Shuffled %d photos for new cycle", total)
-	return nil
-}
-
-func (c *AlbumCache) next() *PhotoInfo {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.photos) == 0 {
-		return nil
-	}
-	if c.index >= len(c.photos) {
-		// All photos shown — reshuffle
-		rand.Shuffle(len(c.photos), func(i, j int) {
-			c.photos[i], c.photos[j] = c.photos[j], c.photos[i]
-		})
-		c.index = 0
-		log.Printf("Reshuffled %d photos for new cycle", len(c.photos))
-	}
-	p := &c.photos[c.index]
-	c.index++
-	return p
-}
-
-func getRandomPhoto(client *http.Client, cfg Config, cache *AlbumCache) (*PhotoInfo, error) {
-	if cfg.AlbumID != "" {
-		p := cache.next()
-		if p == nil {
-			return nil, fmt.Errorf("album cache is empty")
-		}
-		return p, nil
-	}
-
-	for attempts := 0; attempts < 5; attempts++ {
-		url := fmt.Sprintf("%s/api/assets/random?count=1", cfg.ImmichURL)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating request: %w", err)
-		}
-		req.Header.Set("x-api-key", cfg.ImmichAPIKey)
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("calling Immich API: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("Immich API returned status %d: %s", resp.StatusCode, string(body))
-		}
-
-		var assets []albumAsset
-		if err := json.NewDecoder(resp.Body).Decode(&assets); err != nil {
-			return nil, fmt.Errorf("decoding response: %w", err)
-		}
-
-		if len(assets) == 0 {
+	for _, a := range result.Assets.Items {
+		if strings.Contains(strings.ToLower(a.OriginalFileName), "screenshot") {
 			continue
 		}
-
-		if assets[0].Type == "IMAGE" {
-			a := assets[0]
-			return &PhotoInfo{
-				ID:   a.ID,
-				Date: formatDate(a.FileCreatedAt),
-				City: buildLocation(a.ExifInfo),
-			}, nil
-		}
-
-		log.Printf("Skipping non-image asset (type=%s), retrying...", assets[0].Type)
+		photos = append(photos, PhotoInfo{
+			ID:   a.ID,
+			Date: formatDate(a.FileCreatedAt),
+		})
 	}
 
-	return nil, fmt.Errorf("could not find a photo after 5 attempts")
+	hasMore := result.Assets.NextPage != "" && len(result.Assets.Items) >= pageSize
+	return photos, hasMore
+}
+
+func (c *PhotoCache) next() *PhotoInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(c.queue) == 0 {
+		c.fillQueue()
+	}
+	if len(c.queue) == 0 {
+		return nil
+	}
+
+	p := c.queue[0]
+	c.queue = c.queue[1:]
+	c.shown[p.ID] = true
+
+	// Reset shown set when all photos have been shown (~84k)
+	if len(c.shown) >= c.maxPage*10 {
+		log.Printf("All %d photos shown, resetting cycle", len(c.shown))
+		c.shown = make(map[string]bool)
+	}
+
+	return &p
+}
+
+func fetchCity(client *http.Client, cfg Config, assetID string) string {
+	req, err := http.NewRequest("GET", cfg.ImmichURL+"/api/assets/"+assetID, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("x-api-key", cfg.ImmichAPIKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("City fetch error for %s: %v", assetID, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var asset struct {
+		ExifInfo struct {
+			City    string `json:"city"`
+			State   string `json:"state"`
+			Country string `json:"country"`
+		} `json:"exifInfo"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&asset); err != nil {
+		return ""
+	}
+
+	parts := []string{}
+	if asset.ExifInfo.City != "" {
+		parts = append(parts, asset.ExifInfo.City)
+	}
+	if asset.ExifInfo.Country != "" {
+		parts = append(parts, asset.ExifInfo.Country)
+	}
+	return strings.Join(parts, ", ")
 }
 
 var turkishMonths = []string{
@@ -352,25 +326,4 @@ func formatDate(isoDate string) string {
 		}
 	}
 	return fmt.Sprintf("%d %s %d", t.Day(), turkishMonths[t.Month()-1], t.Year())
-}
-
-func buildLocation(exif exifInfo) string {
-	parts := []string{}
-	if exif.City != "" {
-		parts = append(parts, exif.City)
-	}
-	if exif.State != "" {
-		parts = append(parts, exif.State)
-	}
-	if exif.Country != "" {
-		parts = append(parts, exif.Country)
-	}
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += ", "
-		}
-		result += p
-	}
-	return result
 }
