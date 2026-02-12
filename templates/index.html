@@ -119,10 +119,10 @@ html, body {
                 return;
             }
             status.className = "hidden";
-            info.className = "";
 
             var img = new Image();
             img.onload = function() {
+                info.className = "";
                 current.src = img.src;
                 current.onload = function() {
                     var natW = current.naturalWidth || current.width;
@@ -133,14 +133,13 @@ html, body {
                     setTimeout(function() {
                         info.className = "visible";
                     }, 500);
+                    setTimeout(showNext, interval);
                 };
             };
             img.onerror = function() {
                 setTimeout(showNext, interval);
             };
             img.src = "/photo?id=" + item.id + "&t=" + new Date().getTime();
-
-            setTimeout(showNext, interval);
         };
         xhr.send(null);
     }
