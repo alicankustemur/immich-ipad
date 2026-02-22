@@ -59,7 +59,7 @@ html, body {
 </style>
 </head>
 <body>
-<img id="current" alt="">
+<img id="current" alt="" style="display:none">
 <div id="info">
     <div id="info-date"></div>
     <div id="info-city"></div>
@@ -73,7 +73,7 @@ html, body {
     var infoDate = document.getElementById("info-date");
     var infoCity = document.getElementById("info-city");
     var status = document.getElementById("status");
-    var RETRY_WAIT = 60000;
+    var RETRY_WAIT = 300000;
 
     function positionImage(img, natW, natH) {
         var winW = window.innerWidth || document.documentElement.clientWidth;
@@ -95,6 +95,10 @@ html, body {
         info.style.top = (y + h - info.offsetHeight - 10) + "px";
     }
 
+    function retryLater() {
+        setTimeout(showNext, RETRY_WAIT);
+    }
+
     function showNext() {
         var xhr = new XMLHttpRequest();
         xhr.open("GET", "/random?t=" + new Date().getTime(), true);
@@ -102,7 +106,7 @@ html, body {
             if (xhr.readyState !== 4) return;
             if (xhr.status !== 200) {
                 status.className = "";
-                setTimeout(showNext, RETRY_WAIT);
+                retryLater();
                 return;
             }
             var item;
@@ -110,12 +114,12 @@ html, body {
                 item = eval("(" + xhr.responseText + ")");
             } catch(e) {
                 status.className = "";
-                setTimeout(showNext, RETRY_WAIT);
+                retryLater();
                 return;
             }
             if (!item || !item.id) {
                 status.className = "";
-                setTimeout(showNext, RETRY_WAIT);
+                retryLater();
                 return;
             }
             status.className = "hidden";
@@ -123,6 +127,7 @@ html, body {
             var img = new Image();
             img.onload = function() {
                 info.className = "";
+                current.style.display = "";
                 current.src = img.src;
                 current.onload = function() {
                     var natW = current.naturalWidth || current.width;
@@ -137,7 +142,7 @@ html, body {
                 };
             };
             img.onerror = function() {
-                setTimeout(showNext, interval);
+                retryLater();
             };
             img.src = "/photo?id=" + item.id + "&t=" + new Date().getTime();
         };
