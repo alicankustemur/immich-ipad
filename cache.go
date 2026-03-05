@@ -39,10 +39,11 @@ func (c *PhotoCache) fillQueue() {
 
 func (c *PhotoCache) fetchPage(page, pageSize int) ([]PhotoInfo, bool) {
 	searchBody := map[string]interface{}{
-		"type":  "IMAGE",
-		"page":  page,
-		"size":  pageSize,
-		"model": c.cfg.DeviceModel,
+		"type":       "IMAGE",
+		"page":       page,
+		"size":       pageSize,
+		"model":      c.cfg.DeviceModel,
+		"visibility": "timeline",
 	}
 
 	bodyBytes, err := json.Marshal(searchBody)

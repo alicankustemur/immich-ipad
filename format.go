@@ -6,11 +6,13 @@ import (
 )
 
 type PhotoInfo struct {
-	ID       string `json:"id"`
-	Date     string `json:"date"`
-	City     string `json:"city"`
-	Index    int    `json:"index"`
-	Total    int    `json:"total"`
+	ID       string  `json:"id"`
+	Date     string  `json:"date"`
+	City     string  `json:"city"`
+	Lat      float64 `json:"lat,omitempty"`
+	Lon      float64 `json:"lon,omitempty"`
+	Index    int     `json:"index"`
+	Total    int     `json:"total"`
 	cityDone bool
 }
 

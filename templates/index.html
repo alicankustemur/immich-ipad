@@ -23,6 +23,8 @@ html, body {
 }
 #info {
     position: absolute;
+    right: 48px;
+    bottom: 48px;
     z-index: 10;
     color: #fff;
     text-align: right;
@@ -34,13 +36,34 @@ html, body {
 #info.visible {
     opacity: 1;
 }
+#info-weather {
+    font-size: 48px;
+}
+#info-weather img {
+    width: 48px;
+    height: auto;
+    vertical-align: middle;
+}
+#info-clock {
+    font-size: 84px;
+    font-weight: bold;
+}
 #info-date {
-    font-size: 24px;
+    font-size: 48px;
     font-weight: bold;
 }
 #info-city {
-    font-size: 20px;
+    font-size: 40px;
     margin-top: 2px;
+}
+#info-map {
+    display: block;
+    width: 200px;
+    height: 150px;
+    margin-top: 6px;
+    border: 2px solid rgba(255,255,255,0.7);
+    border-radius: 4px;
+    float: right;
 }
 #status {
     position: absolute;
@@ -61,19 +84,50 @@ html, body {
 <body>
 <img id="current" alt="" style="display:none">
 <div id="info">
-    <div id="info-date"></div>
+    <div id="info-weather"></div>
+    <div id="info-clock"></div>
     <div id="info-city"></div>
+    <div id="info-date"></div>
+    <img id="info-map" alt="" style="display:none">
 </div>
 <div id="status">Sunucuya baglaniyor...</div>
 <script>
 (function() {
     var interval = {{.Interval}} * 1000;
+    var showMap = {{.ShowMap}};
     var current = document.getElementById("current");
     var info = document.getElementById("info");
+    var infoWeather = document.getElementById("info-weather");
+    var infoClock = document.getElementById("info-clock");
     var infoDate = document.getElementById("info-date");
     var infoCity = document.getElementById("info-city");
+    var infoMap = document.getElementById("info-map");
     var status = document.getElementById("status");
     var RETRY_WAIT = 300000;
+
+    function updateClock() {
+        var now = new Date();
+        var h = now.getHours();
+        var m = now.getMinutes();
+        infoClock.innerHTML = (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
+    }
+    updateClock();
+    setInterval(updateClock, 30000);
+
+    function fetchWeather() {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "/weather?t=" + new Date().getTime(), true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4 || xhr.status !== 200) return;
+            try {
+                var w = eval("(" + xhr.responseText + ")");
+                infoWeather.innerHTML = "<img src=\"" + w.icon + "\" alt=\"\"> " + w.temp + "\u00B0C";
+            } catch(e) {}
+        };
+        xhr.send(null);
+    }
+    fetchWeather();
+    setInterval(fetchWeather, 900000);
 
     function positionImage(img, natW, natH) {
         var winW = window.innerWidth || document.documentElement.clientWidth;
@@ -90,9 +144,6 @@ html, body {
         img.style.top = y + "px";
         img.style.width = w + "px";
         img.style.height = h + "px";
-
-        info.style.left = (x + w - info.offsetWidth - 10) + "px";
-        info.style.top = (y + h - info.offsetHeight - 10) + "px";
     }
 
     function retryLater() {
@@ -135,6 +186,12 @@ html, body {
                     positionImage(current, natW, natH);
                     infoDate.innerHTML = item.date || "";
                     infoCity.innerHTML = item.city || "";
+                    if (showMap && item.lat && item.lon) {
+                        infoMap.src = "/map?lat=" + item.lat + "&lon=" + item.lon;
+                        infoMap.style.display = "";
+                    } else {
+                        infoMap.style.display = "none";
+                    }
                     setTimeout(function() {
                         info.className = "visible";
                     }, 500);

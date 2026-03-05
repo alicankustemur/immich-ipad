@@ -11,6 +11,12 @@ import (
 //go:embed templates/index.html
 var templateFS embed.FS
 
+//go:embed templates/pin.png
+var pinPNG []byte
+
+//go:embed templates/weather/*
+var weatherFS embed.FS
+
 func main() {
 	cfg := loadConfig()
 
@@ -37,6 +43,7 @@ func main() {
 		tmpl: tmpl,
 	}
 
+	loadPinImage()
 	s.routes()
 
 	addr := ":" + cfg.Port
