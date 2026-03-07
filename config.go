@@ -12,6 +12,7 @@ type Config struct {
 	SlideshowInterval int
 	Port              string
 	ShowMap           bool
+	ShowWeather       bool
 	WeatherLat        string
 	WeatherLon        string
 }
@@ -35,6 +36,7 @@ func loadConfig() Config {
 	}
 
 	showMap := os.Getenv("SHOW_MAP") == "true"
+	showWeather := os.Getenv("SHOW_WEATHER") != "false"
 
 	weatherLat := os.Getenv("WEATHER_LAT")
 	if weatherLat == "" {
@@ -52,6 +54,7 @@ func loadConfig() Config {
 		SlideshowInterval: interval,
 		Port:              port,
 		ShowMap:           showMap,
+		ShowWeather:       showWeather,
 		WeatherLat:        weatherLat,
 		WeatherLon:        weatherLon,
 	}

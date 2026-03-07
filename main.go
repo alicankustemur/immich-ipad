@@ -43,6 +43,7 @@ func main() {
 		tmpl: tmpl,
 	}
 
+	s.cache.startRefreshLoop()
 	loadPinImage()
 	s.routes()
 

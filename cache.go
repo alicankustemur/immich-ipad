@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type PhotoCache struct {
@@ -18,6 +19,48 @@ type PhotoCache struct {
 	maxPage int
 	client  *http.Client
 	cfg     Config
+}
+
+// refreshTotal queries the statistics API to get the current total photo count
+func (c *PhotoCache) refreshTotal() {
+	req, err := http.NewRequest("GET", c.cfg.ImmichURL+"/api/assets/statistics", nil)
+	if err != nil {
+		log.Printf("Statistics request error: %v", err)
+		return
+	}
+	req.Header.Set("x-api-key", c.cfg.ImmichAPIKey)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		log.Printf("Statistics API error: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var stats struct {
+		Images int `json:"images"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		log.Printf("Statistics decode error: %v", err)
+		return
+	}
+
+	if stats.Images > 0 && stats.Images != c.maxPage {
+		log.Printf("Updating maxPage: %d -> %d", c.maxPage, stats.Images)
+		c.mu.Lock()
+		c.maxPage = stats.Images
+		c.mu.Unlock()
+	}
+}
+
+// startRefreshLoop refreshes the total photo count every hour
+func (c *PhotoCache) startRefreshLoop() {
+	c.refreshTotal()
+	go func() {
+		for range time.NewTicker(1 * time.Hour).C {
+			c.refreshTotal()
+		}
+	}()
 }
 
 // fillQueue fetches 1 photo from a random page
@@ -111,8 +154,8 @@ func (c *PhotoCache) next() *PhotoInfo {
 	c.queue = c.queue[1:]
 	c.shown[p.ID] = true
 
-	// Reset shown set when all photos have been shown (~84k)
-	if len(c.shown) >= c.maxPage*10 {
+	// Reset shown set when all photos have been shown
+	if len(c.shown) >= c.maxPage {
 		log.Printf("All %d photos shown, resetting cycle", len(c.shown))
 		c.shown = make(map[string]bool)
 	}

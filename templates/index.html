@@ -103,7 +103,15 @@ html, body {
     var infoCity = document.getElementById("info-city");
     var infoMap = document.getElementById("info-map");
     var status = document.getElementById("status");
-    var RETRY_WAIT = 300000;
+    var hasImage = false;
+    var watchdog = null;
+
+    function resetWatchdog() {
+        if (watchdog) clearTimeout(watchdog);
+        watchdog = setTimeout(function() {
+            showNext();
+        }, 60000);
+    }
 
     function updateClock() {
         var now = new Date();
@@ -114,7 +122,10 @@ html, body {
     updateClock();
     setInterval(updateClock, 30000);
 
+    var showWeather = {{.ShowWeather}};
+
     function fetchWeather() {
+        if (!showWeather) return;
         var xhr = new XMLHttpRequest();
         xhr.open("GET", "/weather?t=" + new Date().getTime(), true);
         xhr.onreadystatechange = function() {
@@ -147,16 +158,29 @@ html, body {
     }
 
     function retryLater() {
-        setTimeout(showNext, RETRY_WAIT);
+        if (!hasImage) {
+            status.className = "";
+        }
+        setTimeout(showNext, interval);
     }
 
     function showNext() {
+        resetWatchdog();
         var xhr = new XMLHttpRequest();
+        var xhrDone = false;
+        var xhrTimer = setTimeout(function() {
+            if (!xhrDone) {
+                xhrDone = true;
+                xhr.abort();
+                retryLater();
+            }
+        }, 15000);
         xhr.open("GET", "/random?t=" + new Date().getTime(), true);
         xhr.onreadystatechange = function() {
-            if (xhr.readyState !== 4) return;
+            if (xhr.readyState !== 4 || xhrDone) return;
+            xhrDone = true;
+            clearTimeout(xhrTimer);
             if (xhr.status !== 200) {
-                status.className = "";
                 retryLater();
                 return;
             }
@@ -164,12 +188,10 @@ html, body {
             try {
                 item = eval("(" + xhr.responseText + ")");
             } catch(e) {
-                status.className = "";
                 retryLater();
                 return;
             }
             if (!item || !item.id) {
-                status.className = "";
                 retryLater();
                 return;
             }
@@ -181,6 +203,7 @@ html, body {
                 current.style.display = "";
                 current.src = img.src;
                 current.onload = function() {
+                    hasImage = true;
                     var natW = current.naturalWidth || current.width;
                     var natH = current.naturalHeight || current.height;
                     positionImage(current, natW, natH);

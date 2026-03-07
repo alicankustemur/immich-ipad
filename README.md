@@ -7,13 +7,15 @@ Built for iPad 1 (iOS 5.1.1 Safari), but works on any browser.
 ## Features
 
 - Truly random photo selection across your entire library — picks from random pages for diverse years and locations
+- Dynamic photo count — automatically discovers total photos via Immich API and refreshes every hour to include newly uploaded photos
 - No repeats until all photos have been shown
 - Lazy city/country fetching from EXIF data, cached per photo
 - Photo info overlay (Turkish date, location) with fade-in effect
+- Optional weather display and map overlay
 - Device model filtering — show only photos from a specific camera (e.g. iPhone 14 Pro)
 - Screenshots automatically excluded
 - Minimal server load — 1 search API call per photo cycle
-- Retries when Immich isn't ready
+- Resilient client — survives server restarts, power outages, and network drops with automatic recovery (retries every slideshow interval, watchdog timer, manual XHR timeout for iPad 1 compatibility)
 - Connects to Immich via Docker network for direct container communication
 
 ## Quick Start
@@ -46,6 +48,10 @@ Open `http://localhost:3000` in a browser.
 | `DEVICE_MODEL` | Camera model to filter by | `iPhone 14 Pro` |
 | `SLIDESHOW_INTERVAL` | Seconds between photos | `15` |
 | `PORT` | Server port | `3000` |
+| `SHOW_WEATHER` | Show weather overlay | `true` |
+| `SHOW_MAP` | Show map overlay | `false` |
+| `WEATHER_LAT` | Weather location latitude | `40.9337` |
+| `WEATHER_LON` | Weather location longitude | `29.1297` |
 
 Generate an API key in Immich under **User Settings > API Keys**.
 

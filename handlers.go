@@ -21,8 +21,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	s.tmpl.Execute(w, map[string]interface{}{
-		"Interval": s.cfg.SlideshowInterval,
-		"ShowMap":  s.cfg.ShowMap,
+		"Interval":    s.cfg.SlideshowInterval,
+		"ShowMap":      s.cfg.ShowMap,
+		"ShowWeather":  s.cfg.ShowWeather,
 	})
 }
 
