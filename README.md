@@ -1,7 +1,7 @@
 # Immich iPad Photo Frame
 
 <p align="center">
-  <img src="assets/preview.png" alt="Immich iPad Photo Frame preview" width="400">
+  <img src="assets/preview.png" alt="Immich iPad Photo Frame preview" width="500">
 </p>
 
 Turn an old iPad into a digital photo frame that displays random photos from your self-hosted [Immich](https://immich.app) server.
