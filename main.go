@@ -35,10 +35,9 @@ func main() {
 		cfg:    cfg,
 		client: client,
 		cache: &PhotoCache{
-			shown:   make(map[string]bool),
-			maxPage: 85000,
-			client:  client,
-			cfg:     cfg,
+			shown:  make(map[string]bool),
+			client: client,
+			cfg:    cfg,
 		},
 		tmpl: tmpl,
 	}

@@ -45,10 +45,12 @@ func (c *PhotoCache) refreshTotal() {
 		return
 	}
 
-	if stats.Images > 0 && stats.Images != c.maxPage {
-		log.Printf("Updating maxPage: %d -> %d", c.maxPage, stats.Images)
+	if stats.Images > 0 {
 		c.mu.Lock()
-		c.maxPage = stats.Images
+		if stats.Images != c.maxPage {
+			log.Printf("Updating maxPage: %d -> %d", c.maxPage, stats.Images)
+			c.maxPage = stats.Images
+		}
 		c.mu.Unlock()
 	}
 }
@@ -65,6 +67,10 @@ func (c *PhotoCache) startRefreshLoop() {
 
 // fillQueue fetches 1 photo from a random page
 func (c *PhotoCache) fillQueue() {
+	if c.maxPage == 0 {
+		log.Printf("maxPage not yet initialized, waiting for statistics refresh")
+		return
+	}
 	for retries := 0; retries < 10; retries++ {
 		page := rand.Intn(c.maxPage) + 1
 		photos, _ := c.fetchPage(page, 1)
@@ -74,7 +80,7 @@ func (c *PhotoCache) fillQueue() {
 		p := photos[0]
 		if !c.shown[p.ID] {
 			c.queue = append(c.queue, p)
-			log.Printf("Fetched page %d (shown: %d)", page, len(c.shown))
+			log.Printf("Fetched page %d (shown: %d, maxPage: %d)", page, len(c.shown), c.maxPage)
 			return
 		}
 	}
