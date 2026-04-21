@@ -21,8 +21,9 @@ type PhotoCache struct {
 	cfg     Config
 }
 
-// refreshTotal queries the statistics API to get the current total photo count
+// refreshTotal discovers the effective max page by binary searching the filtered search API
 func (c *PhotoCache) refreshTotal() {
+	// First get upper bound from statistics API
 	req, err := http.NewRequest("GET", c.cfg.ImmichURL+"/api/assets/statistics", nil)
 	if err != nil {
 		log.Printf("Statistics request error: %v", err)
@@ -45,14 +46,28 @@ func (c *PhotoCache) refreshTotal() {
 		return
 	}
 
-	if stats.Images > 0 {
-		c.mu.Lock()
-		if stats.Images != c.maxPage {
-			log.Printf("Updating maxPage: %d -> %d", c.maxPage, stats.Images)
-			c.maxPage = stats.Images
-		}
-		c.mu.Unlock()
+	if stats.Images == 0 {
+		return
 	}
+
+	// Binary search to find the last page that returns results with our filters
+	low, high := 1, stats.Images
+	for low < high {
+		mid := (low + high + 1) / 2
+		photos, _ := c.fetchPage(mid, 1)
+		if len(photos) > 0 {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+
+	c.mu.Lock()
+	if low != c.maxPage {
+		log.Printf("Updating maxPage: %d -> %d (total images: %d)", c.maxPage, low, stats.Images)
+		c.maxPage = low
+	}
+	c.mu.Unlock()
 }
 
 // startRefreshLoop refreshes the total photo count every hour
