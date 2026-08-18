@@ -3,18 +3,34 @@ package main
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
 	ImmichURL         string
 	ImmichAPIKey      string
-	DeviceModel       string
+	DeviceModels      []string
 	SlideshowInterval int
 	Port              string
 	ShowMap           bool
 	ShowWeather       bool
 	WeatherLat        string
 	WeatherLon        string
+}
+
+// parseDeviceModels splits a comma-separated DEVICE_MODEL value into individual
+// camera models, dropping empty entries and surrounding whitespace/quotes.
+func parseDeviceModels(v string) []string {
+	var models []string
+	for _, m := range strings.Split(v, ",") {
+		m = strings.TrimSpace(m)
+		m = strings.Trim(m, `"'`)
+		m = strings.TrimSpace(m)
+		if m != "" {
+			models = append(models, m)
+		}
+	}
+	return models
 }
 
 func loadConfig() Config {
@@ -30,9 +46,13 @@ func loadConfig() Config {
 		port = v
 	}
 
-	deviceModel := os.Getenv("DEVICE_MODEL")
-	if deviceModel == "" {
-		deviceModel = "iPhone 14 Pro"
+	// DEVICE_MODELS is the current name; DEVICE_MODEL is kept as a fallback.
+	deviceModels := parseDeviceModels(os.Getenv("DEVICE_MODELS"))
+	if len(deviceModels) == 0 {
+		deviceModels = parseDeviceModels(os.Getenv("DEVICE_MODEL"))
+	}
+	if len(deviceModels) == 0 {
+		deviceModels = []string{"iPhone 14 Pro", "iPhone XS"}
 	}
 
 	showMap := os.Getenv("SHOW_MAP") == "true"
@@ -50,7 +70,7 @@ func loadConfig() Config {
 	return Config{
 		ImmichURL:         os.Getenv("IMMICH_URL"),
 		ImmichAPIKey:      os.Getenv("IMMICH_API_KEY"),
-		DeviceModel:       deviceModel,
+		DeviceModels:      deviceModels,
 		SlideshowInterval: interval,
 		Port:              port,
 		ShowMap:           showMap,

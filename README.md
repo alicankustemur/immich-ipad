@@ -16,7 +16,7 @@ Built for iPad 1 (iOS 5.1.1 Safari), but works on any browser.
 - Lazy city/country fetching from EXIF data, cached per photo
 - Photo info overlay (Turkish date, location) with fade-in effect
 - Optional weather display and map overlay
-- Device model filtering — show only photos from a specific camera (e.g. iPhone 14 Pro)
+- Device model filtering — show only photos from specific cameras (e.g. iPhone 14 Pro and iPhone XS), each model weighted by its photo count so every photo is equally likely
 - Screenshots automatically excluded
 - Minimal server load — 1 search API call per photo cycle
 - Resilient client — survives server restarts, power outages, and network drops with automatic recovery (retries every slideshow interval, watchdog timer, manual XHR timeout for iPad 1 compatibility)
@@ -49,7 +49,7 @@ Open `http://localhost:3000` in a browser.
 |----------|-------------|---------|
 | `IMMICH_URL` | Immich server URL (e.g. `http://192.168.1.100:2283`) | *required* |
 | `IMMICH_API_KEY` | Immich API key | *required* |
-| `DEVICE_MODEL` | Camera model to filter by | `iPhone 14 Pro` |
+| `DEVICE_MODELS` | Comma-separated camera models to filter by | `iPhone 14 Pro,iPhone XS` |
 | `SLIDESHOW_INTERVAL` | Seconds between photos | `15` |
 | `PORT` | Server port | `3000` |
 | `SHOW_WEATHER` | Show weather overlay | `true` |

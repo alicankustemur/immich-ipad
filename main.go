@@ -4,6 +4,7 @@ import (
 	"embed"
 	"log"
 	"net/http"
+	"strings"
 	"text/template"
 	"time"
 )
@@ -35,9 +36,10 @@ func main() {
 		cfg:    cfg,
 		client: client,
 		cache: &PhotoCache{
-			shown:  make(map[string]bool),
-			client: client,
-			cfg:    cfg,
+			shown:    make(map[string]bool),
+			maxPages: make(map[string]int),
+			client:   client,
+			cfg:      cfg,
 		},
 		tmpl: tmpl,
 	}
@@ -49,7 +51,7 @@ func main() {
 	addr := ":" + cfg.Port
 	log.Printf("Immich iPad Photo Frame server starting on %s", addr)
 	log.Printf("Immich URL: %s", cfg.ImmichURL)
-	log.Printf("Device model: %s", cfg.DeviceModel)
+	log.Printf("Device models: %s", strings.Join(cfg.DeviceModels, ", "))
 	log.Printf("Slideshow interval: %ds", cfg.SlideshowInterval)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
